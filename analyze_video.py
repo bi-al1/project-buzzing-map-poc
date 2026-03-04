@@ -2,6 +2,9 @@ import argparse
 import subprocess
 import os
 import sys
+import base64
+import json
+import urllib.request
 
 def extract_audio(video_path, audio_path):
     print(f"[{video_path}] から音声を抽出しています...")
@@ -34,10 +37,7 @@ def transcribe_audio(audio_path):
         print("エラー: faster-whisper がインストールされていません。'pip install faster-whisper' を実行してください。")
         sys.exit(1)
 
-    # Kotoba-Whisperモデルのロード (C++ベースでMac Mシリーズに最適化)
-    # 実際の運用時は "kotoba-tech/kotoba-whisper-v2.0" などを指定
-    model_size = "kotoba-tech/kotoba-whisper-v2.0" # HuggingFaceのモデル名
-    # 初回はダウンロードが走ります
+    model_size = "kotoba-tech/kotoba-whisper-v2.0-faster" # HuggingFaceのモデル名
     model = WhisperModel(model_size, device="cpu", compute_type="int8") # Mac環境(CPU/Accelerate)向け設定
 
     segments, info = model.transcribe(audio_path, beam_size=5, language="ja")
@@ -48,7 +48,7 @@ def transcribe_audio(audio_path):
     return transcript
 
 def analyze_frames_with_qwen(frames_dir):
-    print("Qwen3.5 (Ollama) でフレーム画像を解析中 (OCR & 状況説明)...")
+    print("Qwen 3.5 (4Bモデル) APIでフレーム画像を解析中 (OCR & 状況説明)...")
     results = []
     
     frames = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
@@ -62,28 +62,11 @@ def analyze_frames_with_qwen(frames_dir):
         frame_path = os.path.join(frames_dir, frame_name)
         prompt = "この画像に書かれているテキスト(テロップ/看板など)をすべて抽出し、同時に画像で何が起きているか簡潔に説明してください。"
         
-        # Ollama CLIを使ってQwen3.5のVLMモデルを呼び出す
-        # ※VLM対応のQwen (例: qwen-vl 等) を事前に `ollama pull qwen2.5-vl` 等で入れておく前提
-        # ここではユーザの環境に合わせて qwen3.5 系(もしくはVLMモデル)を直接叩くコマンドを想定
-        # (qwen3.5という名前でローカルにVLMモデルが登録されている前提)
-        cmd = [
-            "ollama", "run", "qwen3.5",
-            prompt
-        ]
-        
-        # 本来はollama run の標準入力に画像を渡すか、API経由が良いが、
-        # ここではシンプルに概念を示す。実際のOllama API (http://localhost:11434/api/generate) に
-        # base64で画像を投げるのが確実です。以下はそのAPIを利用した擬似コードに近しい実装です。
-        
-        import base64
-        import json
-        import urllib.request
-        
         with open(frame_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
         data = {
-            "model": "qwen3.5", # ローカルに入っているVLMモデル名に合わせて変更
+            "model": "qwen3.5:4b",
             "prompt": prompt,
             "images": [base64_image],
             "stream": False
@@ -127,7 +110,7 @@ def main():
     # 2. 音声解析 (Kotoba-Whisper)
     transcript = transcribe_audio(audio_path)
     
-    # 3. 映像解析 (Qwen 3.5 via Ollama)
+    # 3. 映像解析 (Qwen 3.5 4B via Ollama API)
     vision_analysis = analyze_frames_with_qwen(frames_dir)
 
     # 4. 結果の結合と出力
@@ -136,7 +119,7 @@ def main():
 ファイル: {video_path}
 =================================
 
-■ 1. 映像/OCR解析 (Qwen 3.5)
+■ 1. 映像/OCR解析 (Qwen 3.5 4B)
 {vision_analysis}
 
 ■ 2. 音声文字起こし (Kotoba-Whisper)
